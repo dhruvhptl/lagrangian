@@ -133,3 +133,55 @@ def test_rnn_predict_proba_switches_to_eval(rnn_cfg, toy_seq_data, ModelClass):
     model.train()  # explicitly put in train mode
     _ = model.predict_proba(X_val)
     assert not model.training, "predict_proba should switch model to eval mode"
+
+
+from src.models.baseline_node import RegimeNODE, NODEConfig
+
+
+@pytest.fixture
+def node_cfg():
+    return NODEConfig(input_dim=37, hidden_dim=32, seed=42)
+
+
+@pytest.mark.parametrize("batch_size", [1, 8])
+def test_node_forward_output_shape(node_cfg, batch_size):
+    model = RegimeNODE(node_cfg)
+    x = torch.randn(batch_size, 40, 37)
+    out = model(x)
+    assert out.shape == (batch_size, 4), f"Expected ({batch_size}, 4), got {out.shape}"
+
+
+def test_node_predict_shape(node_cfg, toy_seq_data):
+    X_train, y_train, X_val, y_val = toy_seq_data
+    model = RegimeNODE(node_cfg)
+    preds = model.predict(X_val)
+    assert preds.shape == (len(X_val),)
+
+
+def test_node_predict_proba_shape(node_cfg, toy_seq_data):
+    X_train, y_train, X_val, y_val = toy_seq_data
+    model = RegimeNODE(node_cfg)
+    proba = model.predict_proba(X_val)
+    assert proba.shape == (len(X_val), 4)
+
+
+def test_node_proba_sums_to_one(node_cfg, toy_seq_data):
+    X_train, y_train, X_val, y_val = toy_seq_data
+    model = RegimeNODE(node_cfg)
+    proba = model.predict_proba(X_val)
+    np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-5)
+
+
+def test_node_predict_in_range(node_cfg, toy_seq_data):
+    X_train, y_train, X_val, y_val = toy_seq_data
+    model = RegimeNODE(node_cfg)
+    preds = model.predict(X_val)
+    assert set(preds.tolist()).issubset({0, 1, 2, 3})
+
+
+def test_node_predict_proba_switches_to_eval(node_cfg, toy_seq_data):
+    X_train, y_train, X_val, y_val = toy_seq_data
+    model = RegimeNODE(node_cfg)
+    model.train()
+    _ = model.predict_proba(X_val)
+    assert not model.training, "predict_proba should switch model to eval mode"
