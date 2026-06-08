@@ -1,5 +1,8 @@
 import numpy as np
 import pytest
+import torch
+from src.models.baseline_lstm import RegimeLSTM, RegimeGRU, RNNConfig
+from src.models.baseline_node import RegimeNODE, NODEConfig
 from src.models.baseline_xgb import RegimeXGB, XGBConfig
 
 
@@ -57,10 +60,6 @@ def test_regime_xgb_feature_importances(xgb_cfg, toy_flat_data):
     model.fit(X_train, y_train, X_val, y_val)
     fi = model.feature_importances()
     assert len(fi) == X_train.shape[1]
-
-
-import torch
-from src.models.baseline_lstm import RegimeLSTM, RegimeGRU, RNNConfig
 
 
 @pytest.fixture
@@ -133,9 +132,6 @@ def test_rnn_predict_proba_switches_to_eval(rnn_cfg, toy_seq_data, ModelClass):
     model.train()  # explicitly put in train mode
     _ = model.predict_proba(X_val)
     assert not model.training, "predict_proba should switch model to eval mode"
-
-
-from src.models.baseline_node import RegimeNODE, NODEConfig
 
 
 @pytest.fixture

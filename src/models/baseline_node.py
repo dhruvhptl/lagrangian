@@ -50,13 +50,12 @@ class RegimeNODE(nn.Module):
         self.odefunc = ODEFunc(cfg.hidden_dim, cfg.ode_hidden_dim)
         self.norm = nn.LayerNorm(cfg.hidden_dim)
         self.head = nn.Linear(cfg.hidden_dim, 4)
-        self._t = torch.tensor([0.0, 1.0])
+        self.register_buffer('_t', torch.tensor([0.0, 1.0]))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (batch, window_len, input_dim)
         h0 = torch.relu(self.input_proj(x[:, -1, :]))  # (batch, hidden_dim)
-        t = self._t.to(x.device)
-        h_traj = odeint(self.odefunc, h0, t, method=self.cfg.solver)  # (2, batch, hidden_dim)
+        h_traj = odeint(self.odefunc, h0, self._t, method=self.cfg.solver)  # (2, batch, hidden_dim)
         h1 = h_traj[-1]  # (batch, hidden_dim)
         return self.head(self.norm(h1))  # (batch, 4)
 
