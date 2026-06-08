@@ -1,0 +1,5 @@
+train_start: "2000-01-01"
+val_size: 252
+test_size: 252
+step_size: 63
+min_train_size: 504

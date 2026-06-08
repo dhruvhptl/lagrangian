@@ -1,0 +1,11 @@
+defaults:
+  - data: default
+  - features: default
+  - labels: default
+  - splits: default
+  - model: xgb
+  - _self_
+
+seed: 42
+output_dir: outputs
+figures_dir: reports/figures

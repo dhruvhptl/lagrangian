@@ -1,0 +1,9 @@
+roll_windows: [5, 10, 21, 63]
+momentum_windows: [5, 21]
+corr_windows: [21, 63]
+cross_assets:
+  - QQQ
+  - TLT
+  - GLD
+  - "^VIX"
+primary_asset: SPY

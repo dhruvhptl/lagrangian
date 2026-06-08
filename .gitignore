@@ -1,0 +1,12 @@
+data/
+outputs/
+multirun/
+__pycache__/
+*.pyc
+.hydra/
+*.egg-info/
+dist/
+.env
+*.parquet
+reports/figures/*.png
+reports/figures/*.html

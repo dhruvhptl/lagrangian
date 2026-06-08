@@ -1,0 +1,7 @@
+horizon: 5
+vol_window: 21
+return_quantile: 0.5
+vol_quantile: 0.5
+smoothing: true
+smoothing_min_periods: 3
+label_asset: SPY
