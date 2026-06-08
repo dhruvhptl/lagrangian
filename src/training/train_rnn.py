@@ -223,8 +223,9 @@ def main(cfg: DictConfig) -> None:
         fold_dir.mkdir(exist_ok=True)
         (fold_dir / "metrics.json").write_text(json.dumps(metrics_dict, indent=2))
 
+        # test_X has (test_size - window_len + 1) samples; align dates to the last n
         n = len(y_pred)
-        test_dates = fold.test_dates[:n]
+        test_dates = fold.test_dates[len(fold.test_dates) - n:]
         plot_regime_timeline(
             test_dates, fold.test_y[:n], y_pred,
             figures_dir / f"fold_{fold.fold_id:02d}_timeline.png",
