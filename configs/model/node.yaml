@@ -1,0 +1,11 @@
+# @package model
+name: node
+input_dim: 37
+hidden_dim: 64
+ode_hidden_dim: 64
+batch_size: 64
+lr: 0.001
+max_epochs: 100
+patience: 10
+device: cpu
+solver: dopri5

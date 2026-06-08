@@ -181,3 +181,11 @@ def test_node_predict_proba_switches_to_eval(node_cfg, toy_seq_data):
     model.train()
     _ = model.predict_proba(X_val)
     assert not model.training, "predict_proba should switch model to eval mode"
+
+
+def test_node_config_fields():
+    cfg = NODEConfig()
+    assert hasattr(cfg, "hidden_dim")
+    assert hasattr(cfg, "ode_hidden_dim")
+    assert hasattr(cfg, "solver")
+    assert cfg.solver == "dopri5"
