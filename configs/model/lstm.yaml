@@ -1,0 +1,10 @@
+# @package model
+name: lstm
+hidden_dim: 64
+num_layers: 2
+dropout: 0.1
+batch_size: 64
+lr: 0.001
+max_epochs: 100
+patience: 10
+device: cpu
