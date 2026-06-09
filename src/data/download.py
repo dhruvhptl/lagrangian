@@ -22,7 +22,7 @@ def download_ticker(ticker: str, start_date: str, end_date: str) -> pd.DataFrame
         end=end_date,
         auto_adjust=True,
         progress=False,
-        multi_level_column=False,
+        multi_level_index=False,
     )
     if raw.empty:
         raise ValueError(f"yfinance returned empty DataFrame for {ticker}")

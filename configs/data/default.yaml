@@ -1,0 +1,11 @@
+tickers:
+  - SPY
+  - QQQ
+  - TLT
+  - GLD
+  - "^VIX"
+start_date: "2004-11-01"
+end_date: "2026-06-08"
+raw_dir: data/raw
+processed_dir: data/processed
+window_len: 40
