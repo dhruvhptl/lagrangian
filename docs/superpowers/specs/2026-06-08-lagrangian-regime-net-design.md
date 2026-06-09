@@ -9,6 +9,8 @@
 
 Build `LagrangianRegimeNet` — a discrete Lagrangian-inspired latent dynamics model with diagonal mass and damping — as the core research contribution of the LLRN project. Compare its walk-forward macro F1, Brier score, and ECE against XGBoost, LSTM, GRU, and Neural ODE baselines on the same folds.
 
+**Class name:** `LagrangianRegimeNet` throughout (model class, config references, test parametrize, entrypoint imports).
+
 The hypothesis: structuring the latent update with a learned diagonal mass matrix and a scalar potential (rather than an unconstrained MLP vector field) produces smoother, better-calibrated regime forecasts.
 
 ---
@@ -88,6 +90,8 @@ z, z_dot = z_new, z_dot_new
 
 The trajectory list stores all `n_steps` positions. The **final position `z_T = trajectory[-1]`** is passed to the classifier head.
 
+**Graph handling note:** `autograd.grad(..., create_graph=True)` retains the computation graph for backprop through the potential gradient. To avoid accidental graph retention across batches, the loop must not cache any intermediate tensors outside the step — all intermediate values (`M_diag`, `dV_dz`, `z_ddot`) are local to each iteration and go out of scope. `self.last_trajectory` stores detached tensors (`.detach()`) so trajectory storage does not prevent garbage collection of the training graph after `loss.backward()`.
+
 ### 3.5 Exogenous Forcing (disabled by default)
 
 When `use_forcing=True`, a linear projection of the last input timestep's features is added to `z_ddot` before the velocity update:
@@ -148,17 +152,15 @@ Training loop structure mirrors `train_node.py / _train_fold` exactly, with grad
 
 ## 6. Trajectory Storage
 
-`RegimeLagrangian.forward()` returns **raw logits** `(batch, 4)` for training (standard interface).
+`LagrangianRegimeNet.forward()` returns **raw logits** `(batch, 4)` for training (standard interface).
 
-For diagnostics, `RegimeLagrangian` also stores `self.last_trajectory: list[torch.Tensor]` — populated during the most recent `forward()` call — containing all `n_steps` intermediate `z` tensors, each `(batch, latent_dim)`. This allows post-hoc visualization of latent paths without changing the forward signature.
-
-`predict_proba` and `predict` use the standard `forward()` and do not access `last_trajectory`.
+For diagnostics, `LagrangianRegimeNet` stores `self.last_trajectory: list[torch.Tensor]` — a list of **detached** `(batch, latent_dim)` tensors, one per integration step. It is **overwritten on every forward pass** and is diagnostic-only state: it is not part of the stable training interface, not included in `state_dict()`, and must not be relied upon across calls. `predict_proba` and `predict` call `forward()` normally and do not access `last_trajectory`.
 
 ---
 
 ## 7. Interface Parity
 
-`RegimeLagrangian` exposes the same public interface as `RegimeLSTM`, `RegimeGRU`, `RegimeNODE`:
+`LagrangianRegimeNet` exposes the same public interface as `RegimeLSTM`, `RegimeGRU`, `RegimeNODE`:
 
 | Method | Signature | Notes |
 |--------|-----------|-------|
@@ -173,10 +175,10 @@ For diagnostics, `RegimeLagrangian` also stores `self.last_trajectory: list[torc
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `src/models/lagrangian_regime_net.py` | Create | `LagrangianConfig`, `RegimeLagrangian` model |
+| `src/models/lagrangian_regime_net.py` | Create | `LagrangianConfig`, `LagrangianRegimeNet` model |
 | `src/training/train_lagrangian.py` | Create | Hydra walk-forward entrypoint |
 | `configs/model/lagrangian.yaml` | Create | Hydra config for Lagrangian model |
-| `tests/test_shapes.py` | Modify | Append shape + behavior tests for `RegimeLagrangian` |
+| `tests/test_shapes.py` | Modify | Append shape + behavior tests for `LagrangianRegimeNet` |
 
 ---
 
@@ -194,6 +196,7 @@ Shape and behavior tests to append to `tests/test_shapes.py`:
 8. `test_lagrangian_trajectory_shape` — each trajectory element is `(batch, latent_dim)`
 9. `test_lagrangian_mass_positive` — `M_diag` output is positive for random input
 10. `test_lagrangian_damping_positive` — `softplus(raw_gamma) > 0` at init
+11. `test_lagrangian_forward_finite` — forward pass on random input produces finite logits (`torch.isfinite(logits).all()`)
 
 ---
 
