@@ -191,7 +191,7 @@ def test_node_config_fields():
     assert cfg.solver == "dopri5"
 
 
-from src.models.lagrangian_regime_net import LagrangianRegimeNet, LagrangianConfig
+from src.models.lagrangian_regime_net import LagrangianRegimeNet, LagrangianConfig, PotentialNet
 
 
 @pytest.fixture
@@ -296,3 +296,71 @@ def test_lagrangian_backward_grad_flow():
     loss.backward()
     assert model.potential_net.net[0].weight.grad is not None, "No grad on potential_net"
     assert model.raw_gamma.grad is not None, "No grad on raw_gamma"
+
+
+# --- v5 tests ---
+
+@pytest.fixture
+def v5_cfg():
+    return LagrangianConfig(
+        input_dim=37,
+        window_len=40,
+        latent_dim=16,
+        hidden_dim=64,
+        n_steps=4,
+        use_vector_damping=True,
+        use_coord_transform=True,
+        seed=42,
+    )
+
+
+def test_lagrangian_v5_forward_shape(v5_cfg):
+    model = LagrangianRegimeNet(v5_cfg)
+    x = torch.randn(4, 40, 37)
+    out = model(x)
+    assert out.shape == (4, 4), f"Expected (4, 4), got {out.shape}"
+
+
+def test_lagrangian_v5_forward_finite(v5_cfg):
+    model = LagrangianRegimeNet(v5_cfg)
+    x = torch.randn(4, 40, 37)
+    logits = model(x)
+    assert torch.isfinite(logits).all(), "v5 forward pass produced non-finite logits"
+
+
+def test_lagrangian_v5_predict_proba_shape(v5_cfg):
+    model = LagrangianRegimeNet(v5_cfg)
+    X = np.random.randn(10, 40, 37).astype(np.float32)
+    proba = model.predict_proba(X)
+    assert proba.shape == (10, 4)
+    np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-5)
+
+
+def test_lagrangian_vector_damping_positive(v5_cfg):
+    """gamma_net output must be strictly positive for random latent input."""
+    model = LagrangianRegimeNet(v5_cfg)
+    # Run a forward pass so gamma_net is exercised; inspect via a direct call
+    z = torch.randn(4, v5_cfg.latent_dim)
+    gamma_vec = torch.nn.functional.softplus(model.gamma_net(z))
+    assert (gamma_vec > 0).all(), "Vector damping must be strictly positive"
+    assert torch.isfinite(gamma_vec).all(), "Vector damping must be finite"
+
+
+def test_lagrangian_v5_backward_grad_flow(v5_cfg):
+    model = LagrangianRegimeNet(v5_cfg)
+    x = torch.randn(4, 40, 37)
+    logits = model(x)
+    loss = logits.sum()
+    loss.backward()
+    assert model.potential_net.net[0].weight.grad is not None, "No grad on DeepPotentialNet"
+    assert model.gamma_net.weight.grad is not None, "No grad on gamma_net"
+    assert model.coord_net.weight.grad is not None, "No grad on coord_net"
+
+
+def test_lagrangian_v5_old_path_unchanged():
+    """Default config (use_vector_damping=False) must still use scalar gamma and shallow potential."""
+    cfg = LagrangianConfig(input_dim=37, window_len=40, latent_dim=8, hidden_dim=32, n_steps=2)
+    model = LagrangianRegimeNet(cfg)
+    assert hasattr(model, 'raw_gamma'), "raw_gamma must exist on default config"
+    assert not hasattr(model, 'gamma_net'), "gamma_net must not exist on default config"
+    assert isinstance(model.potential_net, PotentialNet), "Default must use PotentialNet, not DeepPotentialNet"

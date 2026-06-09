@@ -162,6 +162,8 @@ def main(cfg: DictConfig) -> None:
         damping=cfg.model.damping,
         dt=cfg.model.dt,
         use_forcing=cfg.model.use_forcing,
+        use_vector_damping=getattr(cfg.model, 'use_vector_damping', False),
+        use_coord_transform=getattr(cfg.model, 'use_coord_transform', False),
         eps=cfg.model.eps,
         seed=cfg.seed,
         batch_size=cfg.model.batch_size,

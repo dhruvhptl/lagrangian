@@ -21,6 +21,8 @@ class LagrangianConfig:
     damping: float = 0.1
     dt: float = 1.0
     use_forcing: bool = False
+    use_vector_damping: bool = False
+    use_coord_transform: bool = False
     eps: float = 1e-4
     seed: int = 42
     batch_size: int = 64
@@ -76,6 +78,27 @@ class PotentialNet(nn.Module):
         return self.net(z).squeeze(-1)  # (batch,)
 
 
+class DeepPotentialNet(nn.Module):
+    """Deeper, wider scalar potential: 3-layer MLP with GELU, hidden_dim=128. Near-zero init."""
+
+    def __init__(self, latent_dim: int) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, 128),
+            nn.GELU(),
+            nn.Linear(128, 128),
+            nn.GELU(),
+            nn.Linear(128, 1),
+        )
+        for m in self.net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=0.1)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        return self.net(z).squeeze(-1)  # (batch,)
+
+
 class LagrangianRegimeNet(nn.Module):
     """Discrete Lagrangian-inspired latent dynamics classifier.
 
@@ -102,6 +125,22 @@ class LagrangianRegimeNet(nn.Module):
         self.mass_net = MassNet(cfg.latent_dim, cfg.eps)
         self.potential_net = PotentialNet(cfg.latent_dim, cfg.hidden_dim)
 
+        # v5: replace shallow potential with deeper one when vector damping is enabled
+        if cfg.use_vector_damping:
+            self.potential_net = DeepPotentialNet(cfg.latent_dim)
+
+        # v5: optional coordinate transform q = W z, near-identity init
+        if cfg.use_coord_transform:
+            self.coord_net = nn.Linear(cfg.latent_dim, cfg.latent_dim)
+            nn.init.eye_(self.coord_net.weight)
+            nn.init.zeros_(self.coord_net.bias)
+
+        # v5: vector damping gamma(q) -> latent_dim positive values
+        if cfg.use_vector_damping:
+            self.gamma_net = nn.Linear(cfg.latent_dim, cfg.latent_dim)
+            nn.init.zeros_(self.gamma_net.weight)
+            nn.init.constant_(self.gamma_net.bias, _softplus_inverse(cfg.damping))
+
         # Damping: always positive via softplus. Init so softplus(raw_gamma) ≈ cfg.damping
         self.raw_gamma = nn.Parameter(
             torch.tensor(_softplus_inverse(cfg.damping))
@@ -122,29 +161,47 @@ class LagrangianRegimeNet(nn.Module):
         z = self.z0_head(h)           # (batch, latent_dim)
         z_dot = self.z_dot0_head(h)   # (batch, latent_dim)
 
-        gamma = F.softplus(self.raw_gamma)
         dt = self.cfg.dt
         trajectory = []
 
         for _ in range(self.cfg.n_steps):
             # Enable grad on z for autograd.grad through potential
             z = z.requires_grad_(True)
-            V = self.potential_net(z)                          # (batch,)
+
+            # Optional coordinate transform q = W z
+            if self.cfg.use_coord_transform:
+                q = self.coord_net(z)  # (batch, latent_dim)
+            else:
+                q = z
+
+            V = self.potential_net(q)                          # (batch,)
 
             if torch.is_grad_enabled():
-                dV_dz = autograd.grad(
-                    V.sum(), z, create_graph=True
+                # Differentiate V w.r.t. q; chain rule back to z handled by autograd
+                dV_dq = autograd.grad(
+                    V.sum(), q, create_graph=True
                 )[0]                                           # (batch, latent_dim)
             else:
                 # During inference (no_grad context), compute gradient manually
                 # by temporarily enabling grad just for this computation
                 with torch.enable_grad():
-                    z_tmp = z.detach().requires_grad_(True)
-                    V_tmp = self.potential_net(z_tmp)
-                    dV_dz = autograd.grad(V_tmp.sum(), z_tmp)[0].detach()
+                    if self.cfg.use_coord_transform:
+                        z_tmp = z.detach().requires_grad_(True)
+                        q_tmp = self.coord_net(z_tmp)
+                    else:
+                        z_tmp = z.detach().requires_grad_(True)
+                        q_tmp = z_tmp
+                    V_tmp = self.potential_net(q_tmp)
+                    dV_dq = autograd.grad(V_tmp.sum(), q_tmp)[0].detach()
 
-            M_diag = self.mass_net(z)                          # (batch, latent_dim), positive
-            z_ddot = -(dV_dz + gamma * z_dot) / M_diag        # (batch, latent_dim)
+            M_diag = self.mass_net(q)                          # (batch, latent_dim), positive
+
+            if self.cfg.use_vector_damping:
+                gamma_vec = F.softplus(self.gamma_net(q))  # (batch, latent_dim)
+                z_ddot = -(dV_dq + gamma_vec * z_dot) / M_diag
+            else:
+                gamma = F.softplus(self.raw_gamma)
+                z_ddot = -(dV_dq + gamma * z_dot) / M_diag    # (batch, latent_dim)
 
             if self.cfg.use_forcing:
                 z_ddot = z_ddot + self.forcing_proj(x[:, -1, :])
