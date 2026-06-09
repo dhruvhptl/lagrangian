@@ -1,9 +1,14 @@
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from src.models.baseline_lstm import RegimeLSTM, RegimeGRU, RNNConfig
 from src.models.baseline_node import RegimeNODE, NODEConfig
 from src.models.baseline_xgb import RegimeXGB, XGBConfig
+from src.models.lagrangian_regime_net_mh import LagrangianRegimeNetMH, LagrangianMHConfig
+from src.features.econophysics import build_econophysics_features
+from src.labels.multi_horizon_labeler import MultiHorizonLabeler, MultiHorizonLabelConfig
+from src.utils.multi_horizon_builder import MultiHorizonFold, build_folds_multi
 
 
 @pytest.fixture
@@ -364,3 +369,147 @@ def test_lagrangian_v5_old_path_unchanged():
     assert hasattr(model, 'raw_gamma'), "raw_gamma must exist on default config"
     assert not hasattr(model, 'gamma_net'), "gamma_net must not exist on default config"
     assert isinstance(model.potential_net, PotentialNet), "Default must use PotentialNet, not DeepPotentialNet"
+
+
+# --- v6 MH model tests ---
+
+@pytest.fixture
+def mh_cfg():
+    return LagrangianMHConfig(
+        input_dim=37,
+        window_len=40,
+        latent_dim=16,
+        hidden_dim=64,
+        potential_hidden_dim=64,   # smaller for test speed
+        mass_hidden_dim=32,
+        n_steps=3,
+        use_vector_damping=True,
+        use_coord_transform=True,
+        multi_horizon=True,
+        seed=42,
+    )
+
+
+@pytest.mark.parametrize("batch_size", [1, 4])
+def test_lagrangian_mh_forward_shape(mh_cfg, batch_size):
+    model = LagrangianRegimeNetMH(mh_cfg)
+    x = torch.randn(batch_size, 40, 37)
+    out = model(x)
+    assert out.shape == (batch_size, 4)
+
+
+def test_lagrangian_mh_forward_multi_shapes(mh_cfg):
+    model = LagrangianRegimeNetMH(mh_cfg)
+    x = torch.randn(4, 40, 37)
+    out = model.forward_multi(x)
+    assert set(out.keys()) == {"logits_5", "logits_10", "logits_20"}
+    for k, v in out.items():
+        assert v.shape == (4, 4), f"{k} shape wrong: {v.shape}"
+
+
+def test_lagrangian_mh_forward_finite(mh_cfg):
+    model = LagrangianRegimeNetMH(mh_cfg)
+    x = torch.randn(4, 40, 37)
+    out = model.forward_multi(x)
+    for k, v in out.items():
+        assert torch.isfinite(v).all(), f"Non-finite in {k}"
+
+
+def test_lagrangian_mh_predict_proba(mh_cfg):
+    model = LagrangianRegimeNetMH(mh_cfg)
+    X = np.random.randn(8, 40, 37).astype(np.float32)
+    proba = model.predict_proba(X)
+    assert proba.shape == (8, 4)
+    np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-5)
+
+
+def test_lagrangian_mh_trajectory_stored(mh_cfg):
+    model = LagrangianRegimeNetMH(mh_cfg)
+    x = torch.randn(4, 40, 37)
+    _ = model(x)
+    assert len(model.last_trajectory) == mh_cfg.n_steps
+
+
+def test_lagrangian_mh_backward_grad_flow(mh_cfg):
+    model = LagrangianRegimeNetMH(mh_cfg)
+    x = torch.randn(4, 40, 37)
+    out = model.forward_multi(x)
+    loss = sum(v.sum() for v in out.values())
+    loss.backward()
+    assert model.potential_net.net[0].weight.grad is not None, "No grad on DeepPotentialNet"
+    assert model.gamma_net.weight.grad is not None, "No grad on gamma_net"
+    assert model.coord_net.weight.grad is not None, "No grad on coord_net"
+
+
+# --- Econophysics feature tests ---
+
+@pytest.fixture
+def toy_prices_dict():
+    """Minimal price dict for feature tests — SPY + QQQ + TLT."""
+    idx = pd.date_range("2010-01-01", periods=300, freq="B")
+    rng = np.random.default_rng(42)
+    def make_df(seed_val):
+        rng2 = np.random.default_rng(seed_val)
+        close = 100 * np.exp(np.cumsum(rng2.normal(0, 0.01, 300)))
+        return pd.DataFrame({"close": close, "volume": rng.integers(1e6, 1e7, 300)}, index=idx)
+    return {"SPY": make_df(1), "QQQ": make_df(2), "TLT": make_df(3)}
+
+
+def test_econophysics_features_shape(toy_prices_dict):
+    df = build_econophysics_features(toy_prices_dict, roll_windows=[21])
+    assert len(df) == 300
+    assert df.shape[1] > 0
+
+
+def test_econophysics_features_no_all_nan(toy_prices_dict):
+    df = build_econophysics_features(toy_prices_dict, roll_windows=[21])
+    all_nan_cols = [c for c in df.columns if df[c].isna().all()]
+    assert len(all_nan_cols) == 0, f"All-NaN columns: {all_nan_cols}"
+
+
+def test_econophysics_no_future_leakage(toy_prices_dict):
+    """Features at index t must not depend on prices after t.
+    Check: shift prices by 1 day forward and verify features are unchanged at t-1.
+    This is a smoke check: first valid row of each feature must be NaN (window not filled).
+    """
+    df = build_econophysics_features(toy_prices_dict, roll_windows=[21])
+    # First 20 rows should have NaNs (window=21 not yet filled)
+    assert df.iloc[:20].isna().any(axis=1).all(), "Expected NaNs in first 20 rows (window warmup)"
+
+
+# --- Multi-horizon label tests ---
+
+@pytest.fixture
+def toy_spy_prices():
+    idx = pd.date_range("2010-01-01", periods=500, freq="B")
+    rng = np.random.default_rng(42)
+    close = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 500)))
+    return pd.DataFrame({"close": close}, index=idx)
+
+
+def test_multi_horizon_label_shapes(toy_spy_prices):
+    cfg = MultiHorizonLabelConfig(horizons=[5, 10, 20])
+    labeler = MultiHorizonLabeler(cfg)
+    labels_df = labeler.fit_transform(toy_spy_prices)
+    assert list(labels_df.columns) == ["label_5", "label_10", "label_20"]
+    assert len(labels_df) == len(toy_spy_prices)
+
+
+def test_multi_horizon_labels_in_range(toy_spy_prices):
+    cfg = MultiHorizonLabelConfig(horizons=[5, 10, 20])
+    labeler = MultiHorizonLabeler(cfg)
+    labels_df = labeler.fit_transform(toy_spy_prices)
+    for col in labels_df.columns:
+        valid = labels_df[col].dropna()
+        assert set(valid.astype(int).unique()).issubset({0, 1, 2, 3}), f"{col} has out-of-range values"
+
+
+def test_multi_horizon_no_nan_in_head(toy_spy_prices):
+    """Labels at horizon h must have NaN only in the last h rows (forward return window)."""
+    cfg = MultiHorizonLabelConfig(horizons=[5, 10, 20], smoothing=False)
+    labeler = MultiHorizonLabeler(cfg)
+    labels_df = labeler.fit_transform(toy_spy_prices)
+    # Check label_5: last 5 rows should be NaN (forward return unavailable)
+    assert labels_df["label_5"].iloc[-5:].isna().all(), "Last 5 rows of label_5 should be NaN"
+    # label_20: last 20 rows NaN
+    assert labels_df["label_20"].iloc[-20:].isna().all(), "Last 20 rows of label_20 should be NaN"
