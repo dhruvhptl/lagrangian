@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lagrangian Latent Regime Networks</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --accent2: #3fb950;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ── */
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    /* ── Nav ── */
+    nav {
+      border-bottom: 1px solid var(--border);
+      padding: 14px 0;
+      position: sticky; top: 0;
+      background: var(--bg);
+      z-index: 10;
+    }
+    nav .inner {
+      max-width: 960px; margin: 0 auto; padding: 0 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    nav .logo { font-weight: 700; font-size: 15px; color: var(--text); }
+    nav .links { display: flex; gap: 24px; font-size: 14px; }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 80px 0 64px;
+      text-align: center;
+    }
+    .hero .tag {
+      display: inline-block;
+      background: rgba(88,166,255,0.12);
+      color: var(--accent);
+      border: 1px solid rgba(88,166,255,0.3);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+    .hero h1 {
+      font-size: clamp(28px, 5vw, 48px);
+      font-weight: 800;
+      letter-spacing: -.02em;
+      line-height: 1.15;
+      margin-bottom: 20px;
+    }
+    .hero h1 span { color: var(--accent); }
+    .hero p {
+      max-width: 640px;
+      margin: 0 auto 36px;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.7;
+    }
+    .hero .buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      padding: 10px 22px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      text-decoration: none;
+      display: inline-flex; align-items: center; gap: 8px;
+    }
+    .btn-primary { background: var(--accent); color: #0d1117; }
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--muted); text-decoration: none; }
+
+    /* ── Stats strip ── */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 0 0 72px;
+    }
+    .stat {
+      background: var(--surface);
+      padding: 24px 20px;
+      text-align: center;
+    }
+    .stat .val {
+      font-size: 28px; font-weight: 800; color: var(--accent);
+      letter-spacing: -.02em;
+    }
+    .stat .lbl { font-size: 12px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+
+    /* ── Sections ── */
+    section { margin-bottom: 72px; }
+    h2 {
+      font-size: 22px; font-weight: 700; margin-bottom: 8px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-sub { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+
+    /* ── Chart ── */
+    .chart-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 28px;
+    }
+    .chart-wrap canvas { max-height: 340px; }
+
+    /* ── Results table ── */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 11px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+    .best { color: var(--accent2); font-weight: 700; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-lag { background: rgba(88,166,255,.15); color: var(--accent); }
+    .badge-base { background: rgba(139,148,158,.12); color: var(--muted); }
+
+    /* ── Architecture ── */
+    .arch-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 640px) { .arch-grid { grid-template-columns: 1fr; } }
+    .arch-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px;
+    }
+    .arch-card h3 { font-size: 15px; margin-bottom: 12px; color: var(--accent); }
+    .arch-card p { font-size: 13px; color: var(--muted); line-height: 1.6; }
+    pre.diagram {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--text);
+      overflow-x: auto;
+      margin-top: 20px;
+    }
+    pre.diagram .hl { color: var(--accent); }
+    pre.diagram .hl2 { color: var(--accent2); }
+
+    /* ── Regime taxonomy ── */
+    .regime-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 480px) { .regime-grid { grid-template-columns: 1fr; } }
+    .regime-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+      display: flex; gap: 14px; align-items: flex-start;
+    }
+    .regime-id {
+      width: 32px; height: 32px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 15px; flex-shrink: 0;
+    }
+    .r0 { background: rgba(63,185,80,.2); color: #3fb950; }
+    .r1 { background: rgba(255,166,0,.2); color: #f0883e; }
+    .r2 { background: rgba(88,166,255,.2); color: #58a6ff; }
+    .r3 { background: rgba(248,81,73,.2); color: #f85149; }
+    .regime-info h4 { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+    .regime-info p { font-size: 12px; color: var(--muted); }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <div class="inner">
+    <span class="logo">LLRN</span>
+    <div class="links">
+      <a href="#results">Results</a>
+      <a href="#architecture">Architecture</a>
+      <a href="https://github.com/dhruvhptl/lagrangian">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Hero -->
+<div class="container">
+  <div class="hero">
+    <div class="tag">Research · Physics-Informed ML</div>
+    <h1>Lagrangian <span>Latent Regime</span> Networks</h1>
+    <p>
+      Can latent market states governed by learned Lagrangian mechanics — inertia,
+      potential energy, and dissipation — produce better-calibrated regime forecasts
+      than recurrent and tree-based baselines?
+    </p>
+    <div class="buttons">
+      <a class="btn btn-primary" href="https://github.com/dhruvhptl/lagrangian">
+        View on GitHub
+      </a>
+      <a class="btn btn-secondary" href="#results">See Results</a>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat"><div class="val">71</div><div class="lbl">Walk-forward folds</div></div>
+    <div class="stat"><div class="val">0.3976</div><div class="lbl">Best Lagrangian F1</div></div>
+    <div class="stat"><div class="val">5</div><div class="lbl">Model families</div></div>
+    <div class="stat"><div class="val">87</div><div class="lbl">Unit tests</div></div>
+    <div class="stat"><div class="val">21 yr</div><div class="lbl">Data (2004–2026)</div></div>
+  </div>
+
+  <!-- Regime Taxonomy -->
+  <section id="taxonomy">
+    <h2>Regime Taxonomy</h2>
+    <p class="section-sub">4-class composite label from a 2×2 cross of rolling return direction × volatility level on SPY</p>
+    <div class="regime-grid">
+      <div class="regime-card">
+        <div class="regime-id r0">0</div>
+        <div class="regime-info">
+          <h4>Bull / Calm</h4>
+          <p>Positive returns · Low volatility · Risk-on trending environment</p>
+        </div>
+      </div>
+      <div class="regime-card">
+        <div class="regime-id r1">1</div>
+        <div class="regime-info">
+          <h4>Bull / Stress</h4>
+          <p>Positive returns · High volatility · Uncertain upside, elevated risk</p>
+        </div>
+      </div>
+      <div class="regime-card">
+        <div class="regime-id r2">2</div>
+        <div class="regime-info">
+          <h4>Bear / Calm</h4>
+          <p>Negative returns · Low volatility · Slow-bleed drawdown</p>
+        </div>
+      </div>
+      <div class="regime-card">
+        <div class="regime-id r3">3</div>
+        <div class="regime-info">
+          <h4>Bear / Stress</h4>
+          <p>Negative returns · High volatility · Acute risk-off or crisis regime</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section id="results">
+    <h2>Results</h2>
+    <p class="section-sub">71-fold walk-forward evaluation · expanding train window · val=252d · test=252d · step=63d</p>
+
+    <div class="chart-wrap" style="margin-bottom: 24px;">
+      <canvas id="resultsChart"></canvas>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Type</th>
+            <th>Mean Macro F1</th>
+            <th>Mean Brier</th>
+            <th>Mean ECE</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>XGBoost</td>
+            <td><span class="badge badge-base">Baseline</span></td>
+            <td class="best">0.4208</td>
+            <td>0.6246</td>
+            <td>0.1678</td>
+          </tr>
+          <tr>
+            <td>LSTM</td>
+            <td><span class="badge badge-base">Baseline</span></td>
+            <td>0.4062</td>
+            <td>0.6152</td>
+            <td>0.1477</td>
+          </tr>
+          <tr>
+            <td>GRU</td>
+            <td><span class="badge badge-base">Baseline</span></td>
+            <td>0.4008</td>
+            <td class="best">0.6071</td>
+            <td>0.1477</td>
+          </tr>
+          <tr style="background: rgba(88,166,255,.04);">
+            <td><strong>Lagrangian Conv1D</strong></td>
+            <td><span class="badge badge-lag">Lagrangian</span></td>
+            <td>0.3976</td>
+            <td>0.6214</td>
+            <td class="best">0.1473</td>
+          </tr>
+          <tr>
+            <td>Neural ODE</td>
+            <td><span class="badge badge-base">Baseline</span></td>
+            <td>0.3850</td>
+            <td>0.6281</td>
+            <td>0.1450</td>
+          </tr>
+          <tr>
+            <td>Lagrangian MLP</td>
+            <td><span class="badge badge-lag">Lagrangian</span></td>
+            <td>0.3700</td>
+            <td>0.6552</td>
+            <td>0.1468</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section id="architecture">
+    <h2>Architecture</h2>
+    <p class="section-sub">Modular encoder → shared latent embedding → discrete Lagrangian integrator → classifier head</p>
+
+    <div class="arch-grid">
+      <div class="arch-card">
+        <h3>Encoder (modular)</h3>
+        <p>Four interchangeable encoders all accept <code>(B, T=40, F)</code> and return <code>(B, encoder_dim)</code>. The best-performing variant is the causal Conv1D encoder, which preserves temporal order with no future leakage.</p>
+        <br>
+        <p><strong>mlp</strong> — flatten + 2-layer MLP<br>
+        <strong>conv1d</strong> — 2 causal conv layers, last-step readout<br>
+        <strong>tcn</strong> — dilated causal TCN, dilations [1,2,4,8]<br>
+        <strong>hybrid_conv</strong> — 3 layers F→64→128→64</p>
+      </div>
+      <div class="arch-card">
+        <h3>Lagrangian Integrator</h3>
+        <p>The encoder embedding is projected to an initial latent position <strong>z₀</strong> and velocity <strong>ż₀</strong>. A discrete symplectic Euler integrator evolves this state for <em>n</em> steps under learned dynamics:</p>
+        <br>
+        <p><strong>MassNet</strong> — diagonal positive mass M(q)<br>
+        <strong>PotentialNet</strong> — scalar potential V(q) via autograd<br>
+        <strong>DampingNet</strong> — position-dependent vector damping γ(q)<br>
+        <strong>Update</strong> — velocity first, then position (symplectic)</p>
+      </div>
+    </div>
+
+<pre class="diagram">
+<span class="hl">Input (B, T=40, F)</span>
+      │
+  [<span class="hl">Encoder</span>]  ←── mlp | conv1d | tcn | hybrid_conv
+      │
+      h  (B, encoder_dim)
+   ┌──┴──┐
+ z₀_head  ż₀_head
+   │         │
+  <span class="hl2">z₀        ż₀</span>   (B, latent_dim)
+      │
+  [Symplectic Euler × n_steps]
+    q    = coord_net(z)          optional coordinate transform
+    V    = potential_net(q)      learned scalar potential
+    dV   = ∂V/∂q                 autograd, create_graph=True during train
+    M    = mass_net(q)           diagonal positive mass
+    γ    = gamma_net(q)          vector damping
+    z̈    = -(dV + γ·ż) / M
+    ż    ← ż + dt·z̈             velocity update first (symplectic)
+    z    ← z + dt·ż
+      │
+   <span class="hl2">z_T</span>  (B, latent_dim)
+      │
+  LayerNorm → Linear(4)
+      │
+  <span class="hl">logits (B, 4)</span>
+</pre>
+  </section>
+
+  <!-- Quickstart -->
+  <section id="quickstart">
+    <h2>Quickstart</h2>
+    <p class="section-sub">Tested on Python 3.11 · PyTorch · Hydra · yfinance</p>
+    <div class="arch-card" style="font-family: var(--mono); font-size: 13px; line-height: 2;">
+      <p style="color: var(--muted); margin-bottom: 12px;"># Install</p>
+      <p>git clone https://github.com/dhruvhptl/lagrangian && cd lagrangian</p>
+      <p>pip install -r requirements.txt</p>
+      <br>
+      <p style="color: var(--muted);"># Run best Lagrangian model (subset first)</p>
+      <p>python -m src.training.train_lagrangian model=lagrangian_conv1d \</p>
+      <p>&nbsp;&nbsp;+fold_start=20 +fold_end=40</p>
+      <br>
+      <p style="color: var(--muted);"># Full 71-fold benchmark</p>
+      <p>python -m src.training.train_lagrangian model=lagrangian_conv1d</p>
+      <br>
+      <p style="color: var(--muted);"># Run tests</p>
+      <p>python -m pytest tests/test_shapes.py -v</p>
+    </div>
+  </section>
+
+</div>
+
+<!-- Footer -->
+<footer>
+  <p>
+    <a href="https://github.com/dhruvhptl/lagrangian">GitHub</a> ·
+    Inspired by <a href="https://arxiv.org/abs/2003.04630">Lagrangian Neural Networks</a> (Cranmer et al., 2020) ·
+    Not a trading system. No profitability claims.
+  </p>
+</footer>
+
+<script>
+  const ctx = document.getElementById('resultsChart').getContext('2d');
+
+  const models = ['XGBoost', 'LSTM', 'GRU', 'Lagrangian\nConv1D', 'Neural ODE', 'Lagrangian\nMLP'];
+  const f1     = [0.4208,    0.4062, 0.4008, 0.3976,             0.3850,        0.3700];
+  const brier  = [0.6246,    0.6152, 0.6071, 0.6214,             0.6281,        0.6552];
+
+  const colors = models.map((_, i) => i === 3
+    ? 'rgba(88, 166, 255, 0.85)'
+    : 'rgba(139, 148, 158, 0.45)'
+  );
+  const borders = models.map((_, i) => i === 3
+    ? 'rgba(88, 166, 255, 1)'
+    : 'rgba(139, 148, 158, 0.7)'
+  );
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: models,
+      datasets: [
+        {
+          label: 'Mean Macro F1',
+          data: f1,
+          backgroundColor: colors,
+          borderColor: borders,
+          borderWidth: 1.5,
+          borderRadius: 4,
+          yAxisID: 'y',
+        },
+        {
+          label: 'Mean Brier Score',
+          data: brier,
+          type: 'line',
+          borderColor: 'rgba(63, 185, 80, 0.7)',
+          backgroundColor: 'transparent',
+          pointBackgroundColor: 'rgba(63, 185, 80, 0.9)',
+          pointRadius: 4,
+          borderWidth: 2,
+          tension: 0.3,
+          yAxisID: 'y2',
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          labels: { color: '#8b949e', font: { size: 12 } }
+        },
+        tooltip: {
+          backgroundColor: '#161b22',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#e6edf3',
+          bodyColor: '#8b949e',
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#8b949e', font: { size: 12 } },
+          grid: { color: 'rgba(48,54,61,0.6)' },
+        },
+        y: {
+          min: 0.30,
+          max: 0.46,
+          title: { display: true, text: 'Macro F1', color: '#8b949e', font: { size: 12 } },
+          ticks: { color: '#8b949e', font: { size: 11 } },
+          grid: { color: 'rgba(48,54,61,0.6)' },
+        },
+        y2: {
+          position: 'right',
+          min: 0.55,
+          max: 0.70,
+          title: { display: true, text: 'Brier Score', color: '#8b949e', font: { size: 12 } },
+          ticks: { color: '#8b949e', font: { size: 11 } },
+          grid: { drawOnChartArea: false },
+        }
+      }
+    }
+  });
+</script>
+
+</body>
+</html>
