@@ -14,3 +14,5 @@ fold_*/
 walk_forward_summary.csv
 logs/
 results/*.csv
+results/folds/
+results/all_folds_metrics.csv
