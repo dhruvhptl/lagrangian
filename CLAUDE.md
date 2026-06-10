@@ -34,6 +34,11 @@ src/
   visualization/  plots.py
 configs/model/    one yaml per model variant
 tests/            test_shapes.py  (87 tests, must stay green)
+scripts/          aggregate_folds.py — aggregate results/folds/fold_*/metrics.json to CSV
+results/folds/    per-fold outputs (fold_00/ … fold_81/), gitignored
+logs/             training logs, gitignored
+docs/             index.html — GitHub Pages benchmark dashboard
+.github/workflows/test.yml — CI: pytest on push/PR to main/master
 ```
 
 ## Walk-forward evaluation
@@ -55,7 +60,7 @@ tests/            test_shapes.py  (87 tests, must stay green)
 | NODE | 0.3850 | 0.6281 | 0.1450 |
 | Lagrangian v3 (MLP) | 0.3700 | 0.6373 | 0.1258 |
 
-Saved CSVs: `walk_forward_summary_lagrangian_conv1d.csv`, `walk_forward_summary_xgb.csv`, `walk_forward_summary_lagrangian_v3.csv`, etc. LSTM/GRU/NODE results are in Hydra output logs only (not saved as named CSVs).
+Per-fold outputs: `results/folds/fold_*/metrics.json`. Aggregate: `python scripts/aggregate_folds.py`. LSTM/GRU/NODE results are in Hydra output logs only (not saved as named CSVs).
 
 ## LagrangianRegimeNet architecture
 
@@ -140,13 +145,15 @@ Multi-horizon: `MultiHorizonLabeler` wraps one `QuantileLabeler` per horizon. La
 | v6 (MLP + econo + MH) | 0.385 | Econophysics + multi-horizon | +2.7pp — best subset result |
 | conv1d (37 feat, single-horizon) | 0.381 | New encoder | +2.3pp over MLP baseline |
 | v7 (conv1d + econo + MH) | 0.354 | Combined everything | Regressed — MH loss hurt conv1d |
-| v7b (conv1d + econo, single-horizon) | TBD | Drop MH, keep features | In progress |
+| v7b (conv1d + econo, single-horizon) | ~0.370 | Drop MH, keep features | Regressed — 66-ch input overwhelms 2-layer conv encoder |
 
 **Key lessons:**
 - Flatten+MLP encoder discards temporal order — conv1d encoder was a first-order fix (+2.8pp on 71 folds)
 - Combining conv1d + multi-horizon loss degraded performance (v7 < v6 and < standalone conv1d)
+- Econophysics features (37→66 channels) overwhelm the 2-layer conv encoder without a wider stack
 - Change one axis at a time: encoder, features, or loss objective
 - Multi-horizon supervision is an experimental extension, not a default
+- XGBoost leads at 0.4208 — benefits from tabular features and no sequence overhead
 
 ## Tests
 
