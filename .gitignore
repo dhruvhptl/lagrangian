@@ -1,18 +1,36 @@
-data/
-outputs/
-multirun/
-__pycache__/
+# Data
+data/raw/
+*.parquet
+
+# Python
+**/__pycache__/
 *.pyc
-.hydra/
 *.egg-info/
 dist/
-.env
-*.parquet
-reports/figures/*.png
-reports/figures/*.html
-fold_*/
-walk_forward_summary.csv
+
+# Hydra
+outputs/
+multirun/
+.hydra/
+
+# Training logs
 logs/
-results/*.csv
+
+# Generated results
 results/folds/
+results/*.csv
 results/all_folds_metrics.csv
+
+# Root-level stray fold dirs (any fold_XX pattern at any depth)
+folds/
+fold_*/
+
+# Report figures (generated per-fold; keep only curated summary/ tracked)
+reports/figures/**/*.png
+reports/figures/*.png
+
+# Env
+.env
+
+# Docs internal AI scaffolding
+docs/superpowers/
