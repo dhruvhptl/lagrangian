@@ -47,18 +47,18 @@ def _train_fold_mh(
     cfg: DictConfig,
     device: torch.device,
 ) -> LagrangianRegimeNetMH:
-    """Train one fold with multi-horizon weighted cross-entropy loss."""
+    """Train one fold. Uses multi-horizon weighted loss when multi_horizon=true, else 5d only."""
+    multi_horizon = getattr(cfg.model, 'multi_horizon', True)
+
     X_tr = torch.from_numpy(fold.train_X).float()
     y_tr = {h: torch.from_numpy(fold.train_y[h]).long() for h in [5, 10, 20]}
     X_va = torch.from_numpy(fold.val_X).float().to(device)
     y_va = {h: torch.from_numpy(fold.val_y[h]).long().to(device) for h in [5, 10, 20]}
 
-    dataset = TensorDataset(
-        X_tr,
-        y_tr[5],
-        y_tr[10],
-        y_tr[20],
-    )
+    if multi_horizon:
+        dataset = TensorDataset(X_tr, y_tr[5], y_tr[10], y_tr[20])
+    else:
+        dataset = TensorDataset(X_tr, y_tr[5])
     loader = DataLoader(dataset, batch_size=cfg.model.batch_size, shuffle=True, drop_last=False)
 
     model.to(device)
@@ -72,28 +72,40 @@ def _train_fold_mh(
 
     for epoch in range(cfg.model.max_epochs):
         model.train()
-        for X_batch, y5, y10, y20 in loader:
-            X_batch = X_batch.to(device)
-            y5, y10, y20 = y5.to(device), y10.to(device), y20.to(device)
-            optimizer.zero_grad()
-            out = model.forward_multi(X_batch)
-            loss = (
-                weights[5] * criterion(out["logits_5"], y5)
-                + weights[10] * criterion(out["logits_10"], y10)
-                + weights[20] * criterion(out["logits_20"], y20)
-            )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+        if multi_horizon:
+            for X_batch, y5, y10, y20 in loader:
+                X_batch = X_batch.to(device)
+                y5, y10, y20 = y5.to(device), y10.to(device), y20.to(device)
+                optimizer.zero_grad()
+                out = model.forward_multi(X_batch)
+                loss = (
+                    weights[5] * criterion(out["logits_5"], y5)
+                    + weights[10] * criterion(out["logits_10"], y10)
+                    + weights[20] * criterion(out["logits_20"], y20)
+                )
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+        else:
+            for X_batch, y5 in loader:
+                X_batch, y5 = X_batch.to(device), y5.to(device)
+                optimizer.zero_grad()
+                loss = criterion(model(X_batch), y5)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
 
         model.eval()
         with torch.no_grad():
-            out_val = model.forward_multi(X_va)
-            val_loss = (
-                weights[5] * criterion(out_val["logits_5"], y_va[5])
-                + weights[10] * criterion(out_val["logits_10"], y_va[10])
-                + weights[20] * criterion(out_val["logits_20"], y_va[20])
-            ).item()
+            if multi_horizon:
+                out_val = model.forward_multi(X_va)
+                val_loss = (
+                    weights[5] * criterion(out_val["logits_5"], y_va[5])
+                    + weights[10] * criterion(out_val["logits_10"], y_va[10])
+                    + weights[20] * criterion(out_val["logits_20"], y_va[20])
+                ).item()
+            else:
+                val_loss = criterion(model(X_va), y_va[5]).item()
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -190,6 +202,13 @@ def main(cfg: DictConfig) -> None:
         patience=cfg.model.patience,
         device=str(device),
         multi_horizon=getattr(cfg.model, 'multi_horizon', True),
+        encoder_type=getattr(cfg.model, 'encoder_type', 'mlp'),
+        encoder_dim=getattr(cfg.model, 'encoder_dim', 64),
+        conv_channels=getattr(cfg.model, 'conv_channels', 64),
+        conv_kernel_size=getattr(cfg.model, 'conv_kernel_size', 3),
+        tcn_channels=getattr(cfg.model, 'tcn_channels', 64),
+        tcn_kernel_size=getattr(cfg.model, 'tcn_kernel_size', 3),
+        tcn_dilations=list(getattr(cfg.model, 'tcn_dilations', [1, 2, 4, 8])),
     )
 
     output_dir = Path(".")
@@ -226,16 +245,21 @@ def main(cfg: DictConfig) -> None:
         y_prob = model.predict_proba(fold.test_X)
         result = evaluate(fold.test_y[5], y_pred, y_prob)
 
-        # Also compute 10d and 20d F1 (use argmax of per-horizon logits)
-        with torch.no_grad():
-            model.eval()
-            x_test = torch.from_numpy(fold.test_X).float().to(device)
-            out_test = model.forward_multi(x_test)
-        y_pred_10 = out_test["logits_10"].cpu().numpy().argmax(axis=1)
-        y_pred_20 = out_test["logits_20"].cpu().numpy().argmax(axis=1)
+        # Also compute 10d and 20d F1 when multi-horizon is enabled
         from sklearn.metrics import f1_score
-        f1_10 = float(f1_score(fold.test_y[10], y_pred_10, average="macro", zero_division=0))
-        f1_20 = float(f1_score(fold.test_y[20], y_pred_20, average="macro", zero_division=0))
+        multi_horizon = getattr(cfg.model, 'multi_horizon', True)
+        if multi_horizon:
+            with torch.no_grad():
+                model.eval()
+                x_test = torch.from_numpy(fold.test_X).float().to(device)
+                out_test = model.forward_multi(x_test)
+            y_pred_10 = out_test["logits_10"].cpu().numpy().argmax(axis=1)
+            y_pred_20 = out_test["logits_20"].cpu().numpy().argmax(axis=1)
+            f1_10 = float(f1_score(fold.test_y[10], y_pred_10, average="macro", zero_division=0))
+            f1_20 = float(f1_score(fold.test_y[20], y_pred_20, average="macro", zero_division=0))
+        else:
+            f1_10 = float("nan")
+            f1_20 = float("nan")
 
         metrics_dict = {
             "fold_id": fold.fold_id,
@@ -270,13 +294,17 @@ def main(cfg: DictConfig) -> None:
             figures_dir / f"fold_{fold.fold_id:02d}_cm.png",
         )
 
-        log.info(
-            f"  Macro F1(5d)={result.macro_f1:.4f}  "
-            f"F1(10d)={f1_10:.4f}  "
-            f"F1(20d)={f1_20:.4f}  "
-            f"Brier={result.brier_score:.4f}  "
-            f"ECE={result.ece:.4f}"
-        )
+        if multi_horizon:
+            log.info(
+                f"  Macro F1(5d)={result.macro_f1:.4f}  "
+                f"F1(10d)={f1_10:.4f}  F1(20d)={f1_20:.4f}  "
+                f"Brier={result.brier_score:.4f}  ECE={result.ece:.4f}"
+            )
+        else:
+            log.info(
+                f"  Macro F1(5d)={result.macro_f1:.4f}  "
+                f"Brier={result.brier_score:.4f}  ECE={result.ece:.4f}"
+            )
 
     if not all_metrics:
         log.warning("No folds produced — check split config and data date range.")

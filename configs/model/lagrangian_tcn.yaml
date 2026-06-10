@@ -1,0 +1,27 @@
+# @package model
+name: lagrangian_tcn
+input_dim: 37
+window_len: 40
+latent_dim: 16
+hidden_dim: 64
+encoder_type: tcn
+encoder_dim: 64
+tcn_channels: 64
+tcn_kernel_size: 3
+tcn_dilations:
+  - 1
+  - 2
+  - 4
+  - 8
+n_steps: 8
+damping: 0.1
+dt: 1.0
+use_forcing: false
+use_vector_damping: true
+use_coord_transform: true
+eps: 0.0001
+batch_size: 64
+lr: 0.0005
+max_epochs: 150
+patience: 30
+device: cpu

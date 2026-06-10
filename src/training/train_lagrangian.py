@@ -171,6 +171,13 @@ def main(cfg: DictConfig) -> None:
         max_epochs=cfg.model.max_epochs,
         patience=cfg.model.patience,
         device=str(device),
+        encoder_type=getattr(cfg.model, 'encoder_type', 'mlp'),
+        encoder_dim=getattr(cfg.model, 'encoder_dim', 64),
+        conv_channels=getattr(cfg.model, 'conv_channels', 64),
+        conv_kernel_size=getattr(cfg.model, 'conv_kernel_size', 3),
+        tcn_channels=getattr(cfg.model, 'tcn_channels', 64),
+        tcn_kernel_size=getattr(cfg.model, 'tcn_kernel_size', 3),
+        tcn_dilations=list(getattr(cfg.model, 'tcn_dilations', [1, 2, 4, 8])),
     )
 
     output_dir = Path(".")
@@ -179,6 +186,9 @@ def main(cfg: DictConfig) -> None:
     all_metrics: list[dict] = []
     all_fold_ids: list[int] = []
 
+    fold_start = getattr(cfg, 'fold_start', None)
+    fold_end = getattr(cfg, 'fold_end', None)
+
     for fold in build_folds(
         features,
         labels,
@@ -186,6 +196,11 @@ def main(cfg: DictConfig) -> None:
         window_len=cfg.data.window_len,
         flat=False,
     ):
+        if fold_start is not None and fold.fold_id < fold_start:
+            continue
+        if fold_end is not None and fold.fold_id > fold_end:
+            break
+
         log.info(
             f"Fold {fold.fold_id}: "
             f"train={len(fold.train_y)} val={len(fold.val_y)} test={len(fold.test_y)}"

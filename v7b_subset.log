@@ -1,0 +1,132 @@
+[2026-06-09 23:48:24,727][__main__][INFO] - Config:
+data:
+  tickers:
+  - SPY
+  - QQQ
+  - TLT
+  - GLD
+  - ^VIX
+  start_date: '2004-11-01'
+  end_date: '2026-06-08'
+  raw_dir: data/raw
+  processed_dir: data/processed
+  window_len: 40
+features:
+  roll_windows:
+  - 5
+  - 10
+  - 21
+  - 63
+  momentum_windows:
+  - 5
+  - 21
+  corr_windows:
+  - 21
+  - 63
+  cross_assets:
+  - QQQ
+  - TLT
+  - GLD
+  - ^VIX
+  primary_asset: SPY
+labels:
+  horizon: 5
+  vol_window: 21
+  return_quantile: 0.5
+  vol_quantile: 0.5
+  smoothing: true
+  smoothing_min_periods: 3
+  label_asset: SPY
+splits:
+  train_start: '2000-01-01'
+  val_size: 252
+  test_size: 252
+  step_size: 63
+  min_train_size: 504
+model:
+  name: lagrangian_v7b
+  input_dim: 37
+  window_len: 40
+  latent_dim: 16
+  hidden_dim: 64
+  potential_hidden_dim: 128
+  mass_hidden_dim: 64
+  encoder_type: conv1d
+  encoder_dim: 64
+  conv_channels: 64
+  conv_kernel_size: 3
+  n_steps: 8
+  damping: 0.1
+  dt: 1.0
+  use_forcing: false
+  use_vector_damping: true
+  use_coord_transform: true
+  eps: 0.0001
+  batch_size: 64
+  lr: 0.0005
+  max_epochs: 150
+  patience: 30
+  device: cpu
+  multi_horizon: false
+  use_econophysics_features: true
+seed: 42
+output_dir: outputs
+figures_dir: reports/figures
+fold_start: 20
+fold_end: 40
+
+[2026-06-09 23:48:24,728][src.data.download][INFO] - Loading SPY from cache
+[2026-06-09 23:48:24,771][src.data.download][INFO] - Loading QQQ from cache
+[2026-06-09 23:48:24,774][src.data.download][INFO] - Loading TLT from cache
+[2026-06-09 23:48:24,777][src.data.download][INFO] - Loading GLD from cache
+[2026-06-09 23:48:24,782][src.data.download][INFO] - Loading ^VIX from cache
+[2026-06-09 23:48:24,865][__main__][INFO] - Features shape (with econophysics): (5433, 66)
+[2026-06-09 23:48:26,832][__main__][INFO] - Fold 20: train=1600 val=213 test=213
+[2026-06-09 23:48:46,372][__main__][INFO] -   Macro F1(5d)=0.3522  Brier=0.7001  ECE=0.0844
+[2026-06-09 23:48:46,423][__main__][INFO] - Fold 21: train=1663 val=213 test=213
+[2026-06-09 23:49:04,677][__main__][INFO] -   Macro F1(5d)=0.2606  Brier=0.7075  ECE=0.1615
+[2026-06-09 23:49:04,727][__main__][INFO] - Fold 22: train=1726 val=213 test=213
+[2026-06-09 23:49:23,655][__main__][INFO] -   Macro F1(5d)=0.3427  Brier=0.6946  ECE=0.1071
+[2026-06-09 23:49:23,703][__main__][INFO] - Fold 23: train=1789 val=213 test=213
+[2026-06-09 23:49:42,211][__main__][INFO] -   Macro F1(5d)=0.2582  Brier=0.6994  ECE=0.0976
+[2026-06-09 23:49:42,261][__main__][INFO] - Fold 24: train=1852 val=213 test=213
+[2026-06-09 23:50:08,210][__main__][INFO] -   Macro F1(5d)=0.4528  Brier=0.5648  ECE=0.0385
+[2026-06-09 23:50:08,285][__main__][INFO] - Fold 25: train=1915 val=213 test=213
+[2026-06-09 23:50:36,734][__main__][INFO] -   Macro F1(5d)=0.4363  Brier=0.5970  ECE=0.1321
+[2026-06-09 23:50:36,798][__main__][INFO] - Fold 26: train=1978 val=213 test=213
+[2026-06-09 23:50:58,919][__main__][INFO] -   Macro F1(5d)=0.3983  Brier=0.6448  ECE=0.1110
+[2026-06-09 23:50:58,973][__main__][INFO] - Fold 27: train=2041 val=213 test=213
+[2026-06-09 23:51:22,247][__main__][INFO] -   Macro F1(5d)=0.2612  Brier=0.8087  ECE=0.2709
+[2026-06-09 23:51:22,301][__main__][INFO] - Fold 28: train=2104 val=213 test=213
+[2026-06-09 23:51:47,388][__main__][INFO] -   Macro F1(5d)=0.4208  Brier=0.6209  ECE=0.1051
+[2026-06-09 23:51:47,444][__main__][INFO] - Fold 29: train=2167 val=213 test=213
+[2026-06-09 23:52:12,447][__main__][INFO] -   Macro F1(5d)=0.3802  Brier=0.6596  ECE=0.1116
+[2026-06-09 23:52:12,506][__main__][INFO] - Fold 30: train=2230 val=213 test=213
+[2026-06-09 23:52:35,533][__main__][INFO] -   Macro F1(5d)=0.3400  Brier=0.5890  ECE=0.0734
+[2026-06-09 23:52:35,595][__main__][INFO] - Fold 31: train=2293 val=213 test=213
+[2026-06-09 23:53:01,525][__main__][INFO] -   Macro F1(5d)=0.3284  Brier=0.6934  ECE=0.1255
+[2026-06-09 23:53:01,582][__main__][INFO] - Fold 32: train=2356 val=213 test=213
+[2026-06-09 23:53:26,874][__main__][INFO] -   Macro F1(5d)=0.3008  Brier=0.6392  ECE=0.1134
+[2026-06-09 23:53:26,936][__main__][INFO] - Fold 33: train=2419 val=213 test=213
+[2026-06-09 23:53:52,753][__main__][INFO] -   Macro F1(5d)=0.3328  Brier=0.6151  ECE=0.1248
+[2026-06-09 23:53:52,812][__main__][INFO] - Fold 34: train=2482 val=213 test=213
+[2026-06-09 23:54:19,439][__main__][INFO] -   Macro F1(5d)=0.4211  Brier=0.5783  ECE=0.0527
+[2026-06-09 23:54:19,503][__main__][INFO] - Fold 35: train=2545 val=213 test=213
+[2026-06-09 23:54:46,679][__main__][INFO] -   Macro F1(5d)=0.2415  Brier=0.5180  ECE=0.0689
+[2026-06-09 23:54:46,739][__main__][INFO] - Fold 36: train=2608 val=213 test=213
+[2026-06-09 23:55:27,452][__main__][INFO] -   Macro F1(5d)=0.3565  Brier=0.5089  ECE=0.0393
+[2026-06-09 23:55:27,502][__main__][INFO] - Fold 37: train=2671 val=213 test=213
+[2026-06-09 23:56:13,314][__main__][INFO] -   Macro F1(5d)=0.2428  Brier=0.5285  ECE=0.0927
+[2026-06-09 23:56:13,376][__main__][INFO] - Fold 38: train=2734 val=213 test=213
+[2026-06-09 23:56:43,171][__main__][INFO] -   Macro F1(5d)=0.3215  Brier=0.6008  ECE=0.1833
+[2026-06-09 23:56:43,239][__main__][INFO] - Fold 39: train=2797 val=213 test=213
+[2026-06-09 23:57:13,233][__main__][INFO] -   Macro F1(5d)=0.2903  Brier=0.6572  ECE=0.2098
+[2026-06-09 23:57:13,298][__main__][INFO] - Fold 40: train=2860 val=213 test=213
+[2026-06-09 23:57:47,491][__main__][INFO] -   Macro F1(5d)=0.3946  Brier=0.6578  ECE=0.2132
+[2026-06-09 23:57:47,568][__main__][INFO] - 
+Walk-Forward Summary (lagrangian_v6):
+      macro_f1  balanced_accuracy  brier_score       ece
+mean  0.339697           0.416818     0.632544  0.119854
+std   0.065741           0.065943     0.073067  0.059591
+[2026-06-09 23:57:47,569][__main__][INFO] - Average F1(10d)=nan  Average F1(20d)=nan
+[2026-06-09 23:57:47,682][__main__][INFO] - Done.

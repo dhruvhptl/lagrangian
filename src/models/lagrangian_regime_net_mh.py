@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import List
 
 import numpy as np
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
+
+from src.models.lagrangian_regime_net import _build_encoder, LagrangianConfig
 
 
 def _softplus_inverse(y: float) -> float:
@@ -53,6 +56,14 @@ class LagrangianMHConfig:
     multi_horizon: bool = True
     horizons: list[int] = field(default_factory=lambda: [5, 10, 20])
     horizon_weights: dict[int, float] = field(default_factory=lambda: {5: 1.0, 10: 0.5, 20: 0.5})
+    # Encoder selection (mirrors LagrangianConfig)
+    encoder_type: str = "mlp"
+    encoder_dim: int = 64
+    conv_channels: int = 64
+    conv_kernel_size: int = 3
+    tcn_channels: int = 64
+    tcn_kernel_size: int = 3
+    tcn_dilations: List[int] = field(default_factory=lambda: [1, 2, 4, 8])
 
 
 class RichMassNet(nn.Module):
@@ -103,15 +114,22 @@ class LagrangianRegimeNetMH(nn.Module):
         self.cfg = cfg
         torch.manual_seed(cfg.seed)
 
-        flat_dim = cfg.window_len * cfg.input_dim
-        self.encoder = nn.Sequential(
-            nn.Linear(flat_dim, cfg.hidden_dim),
-            nn.ReLU(),
-            nn.Linear(cfg.hidden_dim, cfg.hidden_dim),
-            nn.ReLU(),
+        # Build a temporary LagrangianConfig to reuse _build_encoder
+        _enc_cfg = LagrangianConfig(
+            input_dim=cfg.input_dim,
+            window_len=cfg.window_len,
+            hidden_dim=cfg.hidden_dim,
+            encoder_type=cfg.encoder_type,
+            encoder_dim=cfg.encoder_dim,
+            conv_channels=cfg.conv_channels,
+            conv_kernel_size=cfg.conv_kernel_size,
+            tcn_channels=cfg.tcn_channels,
+            tcn_kernel_size=cfg.tcn_kernel_size,
+            tcn_dilations=list(cfg.tcn_dilations),
         )
-        self.z0_head = nn.Linear(cfg.hidden_dim, cfg.latent_dim)
-        self.z_dot0_head = nn.Linear(cfg.hidden_dim, cfg.latent_dim)
+        self.encoder = _build_encoder(_enc_cfg)
+        self.z0_head = nn.Linear(cfg.encoder_dim, cfg.latent_dim)
+        self.z_dot0_head = nn.Linear(cfg.encoder_dim, cfg.latent_dim)
 
         self.mass_net = RichMassNet(cfg.latent_dim, cfg.mass_hidden_dim, cfg.eps)
         self.potential_net = DeepPotentialNet(cfg.latent_dim, cfg.potential_hidden_dim)
@@ -191,8 +209,7 @@ class LagrangianRegimeNetMH(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Primary forward — returns 5-day logits (batch, 4)."""
-        batch = x.shape[0]
-        h = self.encoder(x.reshape(batch, -1))
+        h = self.encoder(x)
         z = self.z0_head(h)
         z_dot = self.z_dot0_head(h)
         z_T = self._integrate(z, z_dot, x)
@@ -200,8 +217,7 @@ class LagrangianRegimeNetMH(nn.Module):
 
     def forward_multi(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Multi-horizon forward — returns dict with logits_5, logits_10, logits_20."""
-        batch = x.shape[0]
-        h = self.encoder(x.reshape(batch, -1))
+        h = self.encoder(x)
         z = self.z0_head(h)
         z_dot = self.z_dot0_head(h)
         z_T = self._integrate(z, z_dot, x)

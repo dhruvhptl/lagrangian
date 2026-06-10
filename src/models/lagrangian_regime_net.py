@@ -1,8 +1,19 @@
-"""Lagrangian-inspired discrete latent dynamics regime classifier."""
+"""Lagrangian-inspired discrete latent dynamics regime classifier.
+
+Supports four encoder variants via LagrangianConfig.encoder_type:
+  "mlp"          - flatten + 2-layer MLP (original)
+  "conv1d"       - causal 1D-conv encoder
+  "tcn"          - dilated causal TCN encoder
+  "hybrid_conv"  - wider/deeper causal conv encoder
+
+All encoders output h of shape (batch, encoder_dim), then two linear heads
+map h -> z_0 and h -> z_dot_0. Downstream Lagrangian integrator unchanged.
+"""
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List
 
 import numpy as np
 import torch
@@ -30,6 +41,14 @@ class LagrangianConfig:
     max_epochs: int = 150
     patience: int = 15
     device: str = "cpu"
+    # Encoder selection
+    encoder_type: str = "mlp"        # "mlp" | "conv1d" | "tcn" | "hybrid_conv"
+    encoder_dim: int = 64            # output dim of any encoder before z_0/z_dot_0 heads
+    conv_channels: int = 64
+    conv_kernel_size: int = 3
+    tcn_channels: int = 64
+    tcn_kernel_size: int = 3
+    tcn_dilations: List[int] = field(default_factory=lambda: [1, 2, 4, 8])
 
 
 def _softplus_inverse(y: float) -> float:
@@ -38,6 +57,10 @@ def _softplus_inverse(y: float) -> float:
         raise ValueError(f"softplus_inverse requires y > 0, got {y}")
     return math.log(math.expm1(y))
 
+
+# ---------------------------------------------------------------------------
+# Dynamics sub-modules (unchanged)
+# ---------------------------------------------------------------------------
 
 class MassNet(nn.Module):
     """Diagonal mass matrix: Linear(latent_dim -> latent_dim) -> Softplus + eps.
@@ -79,7 +102,7 @@ class PotentialNet(nn.Module):
 
 
 class DeepPotentialNet(nn.Module):
-    """Deeper, wider scalar potential: 3-layer MLP with GELU, hidden_dim=128. Near-zero init."""
+    """Deeper scalar potential: 3-layer MLP with GELU, hidden_dim=128. Near-zero init."""
 
     def __init__(self, latent_dim: int) -> None:
         super().__init__()
@@ -99,10 +122,149 @@ class DeepPotentialNet(nn.Module):
         return self.net(z).squeeze(-1)  # (batch,)
 
 
+# ---------------------------------------------------------------------------
+# Encoder modules
+# ---------------------------------------------------------------------------
+
+class MLPEncoder(nn.Module):
+    """Flatten + 2-layer MLP encoder (original behavior)."""
+
+    def __init__(self, input_dim: int, window_len: int, hidden_dim: int, encoder_dim: int) -> None:
+        super().__init__()
+        flat_dim = window_len * input_dim
+        self.net = nn.Sequential(
+            nn.Linear(flat_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, encoder_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, T, F)
+        return self.net(x.reshape(x.shape[0], -1))
+
+
+class CausalConv1d(nn.Module):
+    """Single causal Conv1d layer with left-padding to preserve sequence length."""
+
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, dilation: int = 1) -> None:
+        super().__init__()
+        self.pad = (kernel_size - 1) * dilation  # left-only pad
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, dilation=dilation)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, C, T)
+        x = F.pad(x, (self.pad, 0))
+        return self.conv(x)
+
+
+class Conv1dEncoder(nn.Module):
+    """Causal 1D-conv encoder: two causal conv layers, last-step readout."""
+
+    def __init__(self, input_dim: int, conv_channels: int, kernel_size: int, encoder_dim: int) -> None:
+        super().__init__()
+        self.conv1 = CausalConv1d(input_dim, conv_channels, kernel_size)
+        self.conv2 = CausalConv1d(conv_channels, conv_channels, kernel_size)
+        self.proj = nn.Linear(conv_channels, encoder_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, T, F) -> (batch, F, T)
+        x = x.permute(0, 2, 1)
+        x = F.gelu(self.conv1(x))
+        x = F.gelu(self.conv2(x))
+        h = x[:, :, -1]  # last timestep: (batch, conv_channels)
+        return self.proj(h)
+
+
+class TCNResidualBlock(nn.Module):
+    """TCN residual block: two causal dilated convs + residual connection."""
+
+    def __init__(self, channels: int, kernel_size: int, dilation: int) -> None:
+        super().__init__()
+        self.conv1 = CausalConv1d(channels, channels, kernel_size, dilation)
+        self.conv2 = CausalConv1d(channels, channels, kernel_size, dilation)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        x = F.gelu(self.conv1(x))
+        x = self.conv2(x)
+        return F.gelu(x + residual)
+
+
+class TCNEncoder(nn.Module):
+    """Dilated causal TCN encoder with dilation rates [1,2,4,8], last-step readout."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        tcn_channels: int,
+        kernel_size: int,
+        dilations: List[int],
+        encoder_dim: int,
+    ) -> None:
+        super().__init__()
+        # Input projection to tcn_channels
+        self.input_proj = CausalConv1d(input_dim, tcn_channels, kernel_size=1)
+        self.blocks = nn.ModuleList([
+            TCNResidualBlock(tcn_channels, kernel_size, d) for d in dilations
+        ])
+        self.proj = nn.Linear(tcn_channels, encoder_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, T, F) -> (batch, F, T)
+        x = x.permute(0, 2, 1)
+        x = F.gelu(self.input_proj(x))
+        for block in self.blocks:
+            x = block(x)
+        h = x[:, :, -1]  # last timestep: (batch, tcn_channels)
+        return self.proj(h)
+
+
+class HybridConvEncoder(nn.Module):
+    """Wider/deeper causal conv encoder: 3 layers (F->64->128->64), last-step readout."""
+
+    def __init__(self, input_dim: int, kernel_size: int, encoder_dim: int) -> None:
+        super().__init__()
+        self.conv1 = CausalConv1d(input_dim, 64, kernel_size)
+        self.conv2 = CausalConv1d(64, 128, kernel_size)
+        self.conv3 = CausalConv1d(128, 64, kernel_size)
+        self.proj = nn.Linear(64, encoder_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, T, F) -> (batch, F, T)
+        x = x.permute(0, 2, 1)
+        x = F.gelu(self.conv1(x))
+        x = F.gelu(self.conv2(x))
+        x = F.gelu(self.conv3(x))
+        h = x[:, :, -1]  # last timestep: (batch, 64)
+        return self.proj(h)
+
+
+def _build_encoder(cfg: LagrangianConfig) -> nn.Module:
+    enc = cfg.encoder_type
+    if enc == "mlp":
+        return MLPEncoder(cfg.input_dim, cfg.window_len, cfg.hidden_dim, cfg.encoder_dim)
+    elif enc == "conv1d":
+        return Conv1dEncoder(cfg.input_dim, cfg.conv_channels, cfg.conv_kernel_size, cfg.encoder_dim)
+    elif enc == "tcn":
+        return TCNEncoder(
+            cfg.input_dim, cfg.tcn_channels, cfg.tcn_kernel_size, cfg.tcn_dilations, cfg.encoder_dim
+        )
+    elif enc == "hybrid_conv":
+        return HybridConvEncoder(cfg.input_dim, cfg.conv_kernel_size, cfg.encoder_dim)
+    else:
+        raise ValueError(f"Unknown encoder_type '{enc}'. Choose from: mlp, conv1d, tcn, hybrid_conv")
+
+
+# ---------------------------------------------------------------------------
+# Main model
+# ---------------------------------------------------------------------------
+
 class LagrangianRegimeNet(nn.Module):
     """Discrete Lagrangian-inspired latent dynamics classifier.
 
-    Encoder flattens the input window -> MLP -> (z_0, z_dot_0).
+    Encoder (modular, selected by cfg.encoder_type) produces h of shape
+    (batch, encoder_dim). Two linear heads map h -> z_0 and h -> z_dot_0.
     Symplectic Euler integrator evolves latent state for n_steps.
     Classifier head: LayerNorm -> Linear(latent_dim, 4).
     """
@@ -112,36 +274,26 @@ class LagrangianRegimeNet(nn.Module):
         self.cfg = cfg
         torch.manual_seed(cfg.seed)
 
-        flat_dim = cfg.window_len * cfg.input_dim
-        self.encoder = nn.Sequential(
-            nn.Linear(flat_dim, cfg.hidden_dim),
-            nn.ReLU(),
-            nn.Linear(cfg.hidden_dim, cfg.hidden_dim),
-            nn.ReLU(),
-        )
-        self.z0_head = nn.Linear(cfg.hidden_dim, cfg.latent_dim)
-        self.z_dot0_head = nn.Linear(cfg.hidden_dim, cfg.latent_dim)
+        self.encoder = _build_encoder(cfg)
+        self.z0_head = nn.Linear(cfg.encoder_dim, cfg.latent_dim)
+        self.z_dot0_head = nn.Linear(cfg.encoder_dim, cfg.latent_dim)
 
         self.mass_net = MassNet(cfg.latent_dim, cfg.eps)
         self.potential_net = PotentialNet(cfg.latent_dim, cfg.hidden_dim)
 
-        # v5: replace shallow potential with deeper one when vector damping is enabled
         if cfg.use_vector_damping:
             self.potential_net = DeepPotentialNet(cfg.latent_dim)
 
-        # v5: optional coordinate transform q = W z, near-identity init
         if cfg.use_coord_transform:
             self.coord_net = nn.Linear(cfg.latent_dim, cfg.latent_dim)
             nn.init.eye_(self.coord_net.weight)
             nn.init.zeros_(self.coord_net.bias)
 
-        # v5: vector damping gamma(q) -> latent_dim positive values
         if cfg.use_vector_damping:
             self.gamma_net = nn.Linear(cfg.latent_dim, cfg.latent_dim)
             nn.init.zeros_(self.gamma_net.weight)
             nn.init.constant_(self.gamma_net.bias, _softplus_inverse(cfg.damping))
 
-        # Damping: always positive via softplus. Init so softplus(raw_gamma) ≈ cfg.damping
         self.raw_gamma = nn.Parameter(
             torch.tensor(_softplus_inverse(cfg.damping))
         )
@@ -154,10 +306,13 @@ class LagrangianRegimeNet(nn.Module):
 
         self.last_trajectory: list[torch.Tensor] = []
 
+    def _encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Run encoder -> (batch, encoder_dim)."""
+        return self.encoder(x)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (batch, window_len, input_dim)
-        batch = x.shape[0]
-        h = self.encoder(x.reshape(batch, -1))
+        h = self._encode(x)
         z = self.z0_head(h)           # (batch, latent_dim)
         z_dot = self.z_dot0_head(h)   # (batch, latent_dim)
 
@@ -165,25 +320,18 @@ class LagrangianRegimeNet(nn.Module):
         trajectory = []
 
         for _ in range(self.cfg.n_steps):
-            # Enable grad on z for autograd.grad through potential
             z = z.requires_grad_(True)
 
-            # Optional coordinate transform q = W z
             if self.cfg.use_coord_transform:
-                q = self.coord_net(z)  # (batch, latent_dim)
+                q = self.coord_net(z)
             else:
                 q = z
 
-            V = self.potential_net(q)                          # (batch,)
+            V = self.potential_net(q)
 
             if torch.is_grad_enabled():
-                # Differentiate V w.r.t. q; chain rule back to z handled by autograd
-                dV_dq = autograd.grad(
-                    V.sum(), q, create_graph=True
-                )[0]                                           # (batch, latent_dim)
+                dV_dq = autograd.grad(V.sum(), q, create_graph=True)[0]
             else:
-                # During inference (no_grad context), compute gradient manually
-                # by temporarily enabling grad just for this computation
                 with torch.enable_grad():
                     if self.cfg.use_coord_transform:
                         z_tmp = z.detach().requires_grad_(True)
@@ -194,29 +342,25 @@ class LagrangianRegimeNet(nn.Module):
                     V_tmp = self.potential_net(q_tmp)
                     dV_dq = autograd.grad(V_tmp.sum(), q_tmp)[0].detach()
 
-            M_diag = self.mass_net(q)                          # (batch, latent_dim), positive
+            M_diag = self.mass_net(q)
 
             if self.cfg.use_vector_damping:
-                gamma_vec = F.softplus(self.gamma_net(q))  # (batch, latent_dim)
+                gamma_vec = F.softplus(self.gamma_net(q))
                 z_ddot = -(dV_dq + gamma_vec * z_dot) / M_diag
             else:
                 gamma = F.softplus(self.raw_gamma)
-                z_ddot = -(dV_dq + gamma * z_dot) / M_diag    # (batch, latent_dim)
+                z_ddot = -(dV_dq + gamma * z_dot) / M_diag
 
             if self.cfg.use_forcing:
                 z_ddot = z_ddot + self.forcing_proj(x[:, -1, :])
 
-            # Symplectic Euler: update velocity first, then position
             z_dot = z_dot + dt * z_ddot
             z = z + dt * z_dot
 
-            # Store detached tensor — diagnostic only, must not hold training graph
             trajectory.append(z.detach())
 
-        # Overwritten each forward pass — diagnostic state only
         self.last_trajectory = trajectory
 
-        # Use live z (not trajectory[-1]) so gradients flow during training
         return self.head(self.norm(z))  # (batch, 4)
 
     def fit(self, *args, **kwargs) -> None:
